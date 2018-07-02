@@ -17,7 +17,7 @@ module.exports = function (getVault, opts) {
   if (typeof (getVault) !== 'function') {
     // Make a getVault function to get the single vault by default
     vault = getVault
-    getVault = function (datUrl, cb) {
+    getVault = function (dWebUrl, cb) {
       cb(null, vault)
     }
   }
@@ -28,41 +28,41 @@ module.exports = function (getVault, opts) {
   that.parse = parse
   that.get = function (req, res, vault, opts) {
     if (vault) return serveDdbOrVault(req, res, vault)
-    var datUrl = parse(req)
-    getVault(datUrl, function (err, vault) {
+    var dWebUrl = parse(req)
+    getVault(dWebUrl, function (err, vault) {
       if (err) return onerror(err)
-      serveDdbOrVault(req, res, vault, datUrl)
+      serveDdbOrVault(req, res, vault, dWebUrl)
     })
   }
   that.file = function (req, res, vault, filename) {
     if (vault) return serveFile(req, res, vault, filename)
-    var datUrl = parse(req)
-    getVault(datUrl, function (err, vault) {
+    var dWebUrl = parse(req)
+    getVault(dWebUrl, function (err, vault) {
       if (err) return onerror(err)
-      serveFile(req, res, vault, datUrl.filename)
+      serveFile(req, res, vault, dWebUrl.filename)
     })
   }
 
   return that
 
   function onrequest (req, res) {
-    var datUrl = parse(req)
-    if (!datUrl) return onerror(404, res) // TODO: explain error in res
+    var dWebUrl = parse(req)
+    if (!dWebUrl) return onerror(404, res) // TODO: explain error in res
 
-    getVault(datUrl, function (err, vault) {
+    getVault(dWebUrl, function (err, vault) {
       if (err) return onerror(err, res) // TODO: explain error in res
       if (!vault) return onerror(404, res) // TODO: explain error in res
 
-      if (datUrl.op === 'upload') {
+      if (dWebUrl.op === 'upload') {
         var ws = vault.createFileWriteStream('file')
         ws.on('finish', () => res.end(dWebCodec.encode(vault.key)))
         dWebChannel(req, ws)
         return
-      } else if (!datUrl.filename || !vault.metadata) {
+      } else if (!dWebUrl.filename || !vault.metadata) {
         // serve vault or ddatabase ddb
-        serveDdbOrVault(req, res, vault, datUrl).pipe(res)
+        serveDdbOrVault(req, res, vault, dWebUrl).pipe(res)
       } else {
-        serveFile(req, res, vault, datUrl.filename)
+        serveFile(req, res, vault, dWebUrl.filename)
       }
     })
   }
