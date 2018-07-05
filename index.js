@@ -1,156 +1,185 @@
-var assert = require('assert')
-var stream = require('stream')
-var dWebChannel = require('@dwcore/channel')
-var TimeoutStream = require('through-timeout')
-var cbTimeout = require('callback-timeout')
+var toHTML = require('directory-index-html')
+var pump = require('pump')
 var mime = require('mime')
-var rangeParser = require('range-parser')
-var ndjson = require('ndjson')
-var dWebCodec = require('@dwebs/codec')
-var dws2 = require('@dwcore/dws2')
-var debug = require('debug')('dDriveHttp')
+var range = require('range-parser')
+var qs = require('querystring')
+var corsify = require('corsify')
+var pkg = require('./package.json')
 
-module.exports = function (getVault, opts) {
-  assert.ok(getVault, 'dDriveHttp: getVault|vault required')
+module.exports = serve
 
-  var vault
-  if (typeof (getVault) !== 'function') {
-    // Make a getVault function to get the single vault by default
-    vault = getVault
-    getVault = function (dWebUrl, cb) {
-      cb(null, vault)
-    }
-  }
-  // Sanity check =)
-  assert.equal(typeof getVault, 'function', 'dDriveHttp: getVault must be function')
+function serve (vault, opts) {
+  if (!opts) opts = {}
 
-  var that = onrequest
-  that.parse = parse
-  that.get = function (req, res, vault, opts) {
-    if (vault) return serveDdbOrVault(req, res, vault)
-    var dWebUrl = parse(req)
-    getVault(dWebUrl, function (err, vault) {
-      if (err) return onerror(err)
-      serveDdbOrVault(req, res, vault, dWebUrl)
-    })
-  }
-  that.file = function (req, res, vault, filename) {
-    if (vault) return serveFile(req, res, vault, filename)
-    var dWebUrl = parse(req)
-    getVault(dWebUrl, function (err, vault) {
-      if (err) return onerror(err)
-      serveFile(req, res, vault, dWebUrl.filename)
-    })
-  }
-
-  return that
+  return corsify(onrequest)
 
   function onrequest (req, res) {
-    var dWebUrl = parse(req)
-    if (!dWebUrl) return onerror(404, res) // TODO: explain error in res
+    var name = decodeURI(req.url.split('?')[0])
+    var query = qs.parse(req.url.split('?')[1] || '')
 
-    getVault(dWebUrl, function (err, vault) {
-      if (err) return onerror(err, res) // TODO: explain error in res
-      if (!vault) return onerror(404, res) // TODO: explain error in res
+    var wait = (query.wait && Number(query.wait.toString())) || 0
+    var have = vault.metadata ? vault.metadata.length : -1
 
-      if (dWebUrl.op === 'upload') {
-        var ws = vault.createFileWriteStream('file')
-        ws.on('finish', () => res.end(dWebCodec.encode(vault.key)))
-        dWebChannel(req, ws)
-        return
-      } else if (!dWebUrl.filename || !vault.metadata) {
-        // serve vault or ddatabase ddb
-        serveDdbOrVault(req, res, vault, dWebUrl).pipe(res)
-      } else {
-        serveFile(req, res, vault, dWebUrl.filename)
-      }
-    })
-  }
+    if (wait <= have) return ready()
+    waitFor(vault, wait, ready)
 
-  function parse (req) {
-    var segs = req.url.split('/').filter(Boolean)
-    var key = vault
-      ? dWebCodec.encode(vault.key)
-      : segs.shift()
-    var filename = segs.join('/')
-    var op = 'get'
-
-    try {
-      // check if we are serving vault at root
-      key = key.replace(/\.changes$/, '')
-      dWebCodec.decode(key)
-    } catch (e) {
-      filename = segs.length ? [key].concat(segs).join('/') : key
-      key = null
+    function ready () {
+      var arch = /^\d+$/.test(query.version) ? vault.checkout(Number(query.version)) : vault
+      if (name[name.length - 1] === '/') ondirectory(arch, name, req, res, opts)
+      else onfile(arch, name, req, res)
     }
-
-    if (/\.changes$/.test(req.url)) {
-      op = 'changes'
-      if (filename) filename = filename.replace(/\.changes$/, '')
-    } else if (req.method === 'POST') {
-      op = 'upload'
-    }
-
-    var results = {
-      key: key,
-      filename: filename,
-      op: op
-    }
-    debug('parse() results', results)
-    return results
   }
 }
 
-function serveDdbOrVault (req, res, vault, urlOpts) {
-  debug('serveDdbOrVault', vault.key.toString('hex'))
-  var opts = { live: urlOpts.op === 'changes' }
-  var dWebStreams2 = new stream.PassThrough()
-  var src = vault.metadata ? vault.list(opts) : vault.createReadStream(opts)
-  var timeout = TimeoutStream({
-    objectMode: true,
-    duration: 10000
-  }, () => {
-    onerror(404, res)
-    src.destroy()
-  })
+function onfile (vault, name, req, res) {
+  vault.stat(name, function (err, st) {
+    if (err) return on404(vault, res, req)
 
-  res.setHeader('Content-Type', 'application/json')
-  if (vault.metadata) return dWebChannel(src, timeout, ndjson.serialize(), through)
-  return dWebChannel(src, timeout, dws2.obj(function (chunk, enc, cb) {
-    cb(null, chunk.toString())
-  }), ndjson.serialize(), through)
-}
+    if (st.isDirectory()) {
+      res.statusCode = 302
+      res.setHeader('Location', name + '/')
+      return
+    }
 
-function serveFile (req, res, vault, filename) {
-  debug('serveFile', vault.key.toString('hex'), 'filename', [filename])
+    var r = req.headers.range && range(st.size, req.headers.range)[0]
+    res.setHeader('Accept-Ranges', 'bytes')
+    res.setHeader('Content-Type', mime.lookup(name))
 
-  vault.get(filename, cbTimeout((err, entry) => {
-    if (err && err.code === 'ETIMEDOUT') return onerror(404, res)
-    if (err || !entry || entry.type !== 'file') return onerror(404, res)
-    debug('serveFile, got entry', entry)
-
-    var range = req.headers.range && rangeParser(entry.length, req.headers.range)[0]
-
-    res.setHeader('Access-Ranges', 'bytes')
-    res.setHeader('Content-Type', mime.lookup(filename))
-
-    if (!range || range < 0) {
-      res.setHeader('Content-Length', entry.length)
-      if (req.method === 'HEAD') return res.end()
-      debug('serveFile, returning file')
-      return dWebChannel(vault.createFileReadStream(entry), res)
-    } else {
+    if (r) {
       res.statusCode = 206
-      res.setHeader('Content-Length', range.end - range.start + 1)
-      res.setHeader('Content-Range', 'bytes ' + range.start + '-' + range.end + '/' + entry.length)
-      if (req.method === 'HEAD') return res.end()
-      return dWebChannel(vault.createFileReadStream(entry, {start: range.start, end: range.end + 1}), res)
+      res.setHeader('Content-Range', 'bytes ' + r.start + '-' + r.end + '/' + st.size)
+      res.setHeader('Content-Length', r.end - r.start + 1)
+    } else {
+      res.setHeader('Content-Length', st.size)
     }
-  }, 10000))
+
+    if (req.method === 'HEAD') return res.end()
+    pump(vault.createReadStream(name, r), res)
+  })
 }
 
-function onerror (status, res) {
-  if (typeof status !== 'number') status = 404
+function on404 (vault, req, res) {
+  getManifest(vault, function (err, parsed) {
+    if (err) return onerror(res, 404, err)
+
+    var fallbackPage = parsed.fallback_page
+
+    if (!fallbackPage) return onerror(res, 404, new Error('Not Found, No Fallback'))
+
+    vault.stat(fallbackPage, function (err) {
+      if (err) return onerror(res, 404, err)
+      onfile(vault, fallbackPage, req, res)
+    })
+  })
+}
+
+function ondirectory (vault, name, req, res, opts) {
+  vault.stat(name + 'index.html', function (err) {
+    if (err) return ondirectoryindex(vault, name, req, res, opts)
+    onfile(vault, name + 'index.html', req, res)
+  })
+}
+
+function ondirectoryindex (vault, name, req, res, opts) {
+  list(vault, name, function (err, entries) {
+    if (err) entries = []
+
+    var wait = vault.metadata ? vault.metadata.length + 1 : 0
+    var script = `
+      function liveUpdate () {
+        var xhr = new XMLHttpRequest()
+        xhr.open("GET", ".${name}?wait=${wait}", true)
+        xhr.onload = function () {
+          if (xhr.status !== 200) return onerror()
+          document.open()
+          document.write(xhr.responseText)
+          document.close()
+        }
+        xhr.onerror = onerror
+        xhr.send(null)
+        function onerror () {
+          setTimeout(liveUpdate, 1000)
+        }
+      }
+      liveUpdate()
+    `
+
+    var footer = opts.footer ? 'Vault version: ' + vault.version : null
+    var html = toHTML({directory: name, script: (!opts.live || vault._checkout) ? null : script, footer: footer}, entries)
+    res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    res.setHeader('Content-Length', Buffer.byteLength(html))
+    if (opts.exposeHeaders) {
+      res.setHeader('dDrive-Key', vault.key.toString('hex'))
+      res.setHeader('dDrive-Version', vault.version)
+      res.setHeader('dDrive-Http-Version', pkg.version)
+    }
+    res.end(html)
+  })
+}
+
+function getManifest (vault, cb) {
+  vault.readFile('/dpack.json', 'utf-8', function (err, data) {
+    if (err) cb(err)
+    try {
+      var parsed = JSON.parse(data)
+    } catch (e) {
+      return cb(err)
+    }
+
+    if (!parsed || Array.isArray(parsed) || (typeof parsed !== 'object')) {
+      return cb(new Error('Invalid dpack.json format'))
+    }
+
+    cb(null, parsed)
+  })
+}
+
+function waitFor (vault, until, cb) { // this feels a bit hacky, TODO: make less complicated?
+  vault.setMaxListeners(0)
+  if (!vault.metadata) vault.once('ready', waitFor.bind(null, vault, until, cb))
+  if (vault.metadata.length >= until) return cb()
+  vault.metadata.setMaxListeners(0)
+  vault.metadata.once('append', waitFor.bind(null, vault, until, cb))
+}
+
+function onerror (res, status, err) {
   res.statusCode = status
-  res.end()
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+  res.end(err.stack)
+}
+
+function list (vault, name, cb) {
+  vault.readdir(name, function (err, names) {
+    if (err) return cb(err)
+
+    var error = null
+    var missing = names.length
+    var entries = []
+
+    if (!missing) return cb(null, [])
+    for (var i = 0; i < names.length; i++) stat(name + names[i], names[i])
+
+    function stat (name, base) {
+      vault.stat(name, function (err, st) {
+        if (err) error = err
+
+        if (st) {
+          entries.push({
+            type: st.isDirectory() ? 'directory' : 'file',
+            name: base,
+            size: st.size,
+            mtime: st.mtime
+          })
+        }
+
+        if (--missing) return
+        if (error) return cb(error)
+        cb(null, entries.sort(sort))
+      })
+    }
+  })
+}
+
+function sort (a, b) {
+  return a.name.localeCompare(b.name)
 }

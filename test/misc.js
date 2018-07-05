@@ -6,14 +6,14 @@ var ddriveHttp = require('..')
 
 var server = http.createServer()
 
-test('dDrive HTTP Tests: setup', function (t) {
+test('setup', function (t) {
   server.listen(8001)
   server.once('listening', function () {
     t.end()
   })
 })
 
-test('dDrive HTTP Tests: GET Parsing no key', function (t) {
+test('GET Parsing no key', function (t) {
   t.plan(8)
   var count = 0
   var rootUrl = 'http://localhost:8001'
@@ -29,18 +29,18 @@ test('dDrive HTTP Tests: GET Parsing no key', function (t) {
     t.same(info.filename, fileTests[count], 'file parse ok')
     count++
     if (count === fileTests.length) server.removeListener('request', onrequest)
-    cb(404)
+    cb(null, 404)
   })
   server.on('request', onrequest)
   fileTests.forEach(function (filePath) {
     var getUrl = filePath ? url.resolve(rootUrl, filePath) : rootUrl
     request.get(getUrl).on('error', function () {
-      return
+
     })
   })
 })
 
-test('dDrive HTTP Tests: GET Parsing with key', function (t) {
+test('GET Parsing with key', function (t) {
   t.plan(8)
   var count = 0
   var rootUrl = 'http://localhost:8001'
@@ -56,7 +56,7 @@ test('dDrive HTTP Tests: GET Parsing with key', function (t) {
     t.same(info.key, segs.shift())
     t.same(info.filename, segs.join('/'), 'file parse ok')
     if (count === fileTests.length) server.removeListener('request', onrequest)
-    cb(404)
+    cb(null, 404)
   })
   server.on('request', onrequest)
   next()
@@ -71,10 +71,10 @@ test('dDrive HTTP Tests: GET Parsing with key', function (t) {
   function testFile (filePath, cb) {
     var getUrl = filePath ? url.resolve(rootUrl, filePath) : rootUrl
     request.get(getUrl)
-    .on('response', function () {
-      count++
-      cb()
-    })
+      .on('response', function () {
+        count++
+        cb()
+      })
   }
 })
 
