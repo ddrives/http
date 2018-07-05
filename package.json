@@ -1,6 +1,6 @@
 {
   "name": "@ddrive/http",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Library For Handling dDrive and dDatabase HTTP Requests",
   "contributors": [
     "Jared Rice Sr. <jared@dwebs.io>",
@@ -12,26 +12,22 @@
     "test": "standard && tape test/*.js | tap-spec"
   },
   "dependencies": {
-    "@dwcore/channel": "dwcore/channel#master",
-    "@dwcore/dws2": "dwcore/dws2#master",
-    "@dwebs/codec": "distributedweb/codec#master",
-    "callback-timeout": "^3.0.0",
-    "debug": "^2.6.1",
-    "mime": "^1.3.4",
-    "ndjson": "^1.4.3",
+    "@dwebs/codec": "*",
+    "collect-stream": "^1.2.1",
+    "corsify": "^2.1.0",
+    "directory-index-html": "^2.1.0",
+    "memdb": "^1.3.1",
+    "mime": "^2.3.1",
+    "ndjson": "^1.5.0",
+    "pump": "^3.0.0",
     "range-parser": "^1.2.0",
-    "through-timeout": "^1.0.0"
+    "tape": "^4.9.1"
   },
   "devDependencies": {
-    "@ddatabase/core": "ddatabase/core#master",
-    "@ddrive/core": "ddrives/core#master",
-    "@dwcore/dwsc": "dwcore/dwsc#master",
-    "@dwcore/ref": "*",
-    "memdb": "^1.3.1",
-    "request": "^2.73.0",
-    "standard": "^8.5.0",
-    "tap-spec": "^4.1.1",
-    "tape": "^4.6.0"
+    "@ddrive/core": "*",
+    "@flockcore/core": "*",
+    "random-access-memory": "^3.0.0",
+    "standard": "^11.0.1"
   },
   "publishConfig": {
     "access": "public"
